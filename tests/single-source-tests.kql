@@ -1,0 +1,75 @@
+// Synthetic unit tests for single-source brute-force grouping.
+// All timestamps are explicit so fixed 5-minute buckets are exercised.
+// Expected: T1=1 detection; T2-T6=0 detections.
+
+let TestEvents = datatable(
+    TestCase:string,
+    EventTime:datetime,
+    UserPrincipalName:string,
+    IPAddress:string,
+    ResultType:string
+)
+[
+    // T1: five candidate failures, same IP/account/bucket => detect
+    "T1", datetime(2026-01-01 10:00:00), "alex@lab.invalid", "10.0.0.1", "50126",
+    "T1", datetime(2026-01-01 10:00:30), "alex@lab.invalid", "10.0.0.1", "50126",
+    "T1", datetime(2026-01-01 10:01:00), "alex@lab.invalid", "10.0.0.1", "50126",
+    "T1", datetime(2026-01-01 10:02:00), "alex@lab.invalid", "10.0.0.1", "50126",
+    "T1", datetime(2026-01-01 10:03:00), "alex@lab.invalid", "10.0.0.1", "50126",
+
+    // T2: four failures => no detect
+    "T2", datetime(2026-01-01 10:00:00), "sam@lab.invalid", "10.0.0.2", "50126",
+    "T2", datetime(2026-01-01 10:00:30), "sam@lab.invalid", "10.0.0.2", "50126",
+    "T2", datetime(2026-01-01 10:01:00), "sam@lab.invalid", "10.0.0.2", "50126",
+    "T2", datetime(2026-01-01 10:02:00), "sam@lab.invalid", "10.0.0.2", "50126",
+
+    // T3: five events with a code outside the candidate set => no detect
+    "T3", datetime(2026-01-01 10:00:00), "john@lab.invalid", "10.0.0.3", "50074",
+    "T3", datetime(2026-01-01 10:00:30), "john@lab.invalid", "10.0.0.3", "50074",
+    "T3", datetime(2026-01-01 10:01:00), "john@lab.invalid", "10.0.0.3", "50074",
+    "T3", datetime(2026-01-01 10:02:00), "john@lab.invalid", "10.0.0.3", "50074",
+    "T3", datetime(2026-01-01 10:03:00), "john@lab.invalid", "10.0.0.3", "50074",
+
+    // T4: five failures split 3+2 across two fixed buckets => no bucket reaches 5
+    "T4", datetime(2026-01-01 10:04:00), "priya@lab.invalid", "10.0.0.4", "50126",
+    "T4", datetime(2026-01-01 10:04:20), "priya@lab.invalid", "10.0.0.4", "50126",
+    "T4", datetime(2026-01-01 10:04:40), "priya@lab.invalid", "10.0.0.4", "50126",
+    "T4", datetime(2026-01-01 10:05:10), "priya@lab.invalid", "10.0.0.4", "50126",
+    "T4", datetime(2026-01-01 10:05:30), "priya@lab.invalid", "10.0.0.4", "50126",
+
+    // T5: five successful events => no failed-credential detection
+    "T5", datetime(2026-01-01 10:00:00), "maria@lab.invalid", "10.0.0.5", "0",
+    "T5", datetime(2026-01-01 10:00:30), "maria@lab.invalid", "10.0.0.5", "0",
+    "T5", datetime(2026-01-01 10:01:00), "maria@lab.invalid", "10.0.0.5", "0",
+    "T5", datetime(2026-01-01 10:02:00), "maria@lab.invalid", "10.0.0.5", "0",
+    "T5", datetime(2026-01-01 10:03:00), "maria@lab.invalid", "10.0.0.5", "0",
+
+    // T6: one IP targets five users once each => not single-account brute force
+    "T6", datetime(2026-01-01 10:00:00), "u1@lab.invalid", "10.0.0.6", "50126",
+    "T6", datetime(2026-01-01 10:00:10), "u2@lab.invalid", "10.0.0.6", "50126",
+    "T6", datetime(2026-01-01 10:00:20), "u3@lab.invalid", "10.0.0.6", "50126",
+    "T6", datetime(2026-01-01 10:00:30), "u4@lab.invalid", "10.0.0.6", "50126",
+    "T6", datetime(2026-01-01 10:00:40), "u5@lab.invalid", "10.0.0.6", "50126"
+];
+let ActualResults =
+    TestEvents
+    | where ResultType == "50126"
+    | summarize FailedAttempts = count()
+        by TestCase, UserPrincipalName, IPAddress, bin(EventTime, 5m)
+    | extend IsDetected = FailedAttempts >= 5
+    | summarize ActualDetectedGroups = countif(IsDetected) by TestCase;
+let ExpectedResults = datatable(TestCase:string, ExpectedDetectedGroups:long)
+[
+    "T1", 1,
+    "T2", 0,
+    "T3", 0,
+    "T4", 0,
+    "T5", 0,
+    "T6", 0
+];
+ExpectedResults
+| join kind=leftouter ActualResults on TestCase
+| extend ActualDetectedGroups = coalesce(ActualDetectedGroups, 0)
+| extend TestResult = iff(ExpectedDetectedGroups == ActualDetectedGroups, "PASS", "FAIL")
+| project TestCase, ExpectedDetectedGroups, ActualDetectedGroups, TestResult
+| order by TestCase asc

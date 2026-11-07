@@ -1,0 +1,32 @@
+// Detection: Single-source brute force candidate
+// Grouping: one source IP + one account + fixed 5-minute bucket
+// Lab threshold: >= 5 candidate failures
+// Validate ResultType values and threshold against your tenant before deployment.
+
+let Lookback = 24h;
+let CandidateFailureCodes = dynamic(["50126"]);
+SigninLogs
+| where TimeGenerated >= ago(Lookback)
+| where ResultType in (CandidateFailureCodes)
+| where isnotempty(IPAddress)
+| where isnotempty(UserPrincipalName)
+| summarize
+    FailedAttempts = count(),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    FailureCodes = make_set(ResultType, 10),
+    FailureDescriptions = make_set(ResultDescription, 10)
+    by IPAddress, UserPrincipalName, bin(TimeGenerated, 5m)
+| where FailedAttempts >= 5
+| extend DetectionName = "Single-source brute force candidate"
+| project
+    TimeGenerated = LastSeen,
+    DetectionName,
+    UserPrincipalName,
+    IPAddress,
+    FailedAttempts,
+    FirstSeen,
+    LastSeen,
+    FailureCodes,
+    FailureDescriptions
+| order by FailedAttempts desc

@@ -1,0 +1,33 @@
+// Detection: Distributed brute force candidate
+// Grouping: one account + fixed 5-minute bucket across multiple IPs
+// Lab threshold: >= 5 candidate failures from >= 2 distinct IPs
+// Validate ResultType values and threshold against your tenant before deployment.
+
+let Lookback = 24h;
+let CandidateFailureCodes = dynamic(["50126"]);
+SigninLogs
+| where TimeGenerated >= ago(Lookback)
+| where ResultType in (CandidateFailureCodes)
+| where isnotempty(IPAddress)
+| where isnotempty(UserPrincipalName)
+| summarize
+    FailedAttempts = count(),
+    SourceIPs = dcount(IPAddress),
+    SourceIPList = make_set(IPAddress, 20),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    FailureCodes = make_set(ResultType, 10)
+    by UserPrincipalName, bin(TimeGenerated, 5m)
+| where FailedAttempts >= 5 and SourceIPs >= 2
+| extend DetectionName = "Distributed brute force candidate"
+| project
+    TimeGenerated = LastSeen,
+    DetectionName,
+    UserPrincipalName,
+    FailedAttempts,
+    SourceIPs,
+    SourceIPList,
+    FirstSeen,
+    LastSeen,
+    FailureCodes
+| order by FailedAttempts desc
